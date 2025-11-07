@@ -16,4 +16,6 @@ Q562
 `-
 JT98
 
-N starts and I see bidding 1s, 2d. So you know your partner has minim 5 spads and 12-21 points, your oponen has at least 5 dimonds, 8-15 points. After entering all this information your screen can look like that. 
+N starts and I see bidding 1s, 2d. So you know your partner has minim 5 spads and 12-21 points, your oponen has at least 5 dimonds, 8-15 points. Now your screen looks like this (or similar, depending on your assumptions):
+![alt text](Ex1.png)
+
