@@ -4,7 +4,7 @@
 
 **How to use**
 
-![alt text](https://github.com/LucjanJanowski/bridge_mental_visualization/screen.png?raw=true)
+![alt text](screen.png)
 
 For each player you have range of pints which you predict. You can put any number of cards (traditionally by x). If you know the card you can change x to the value. Possible values are digits 2-9, T, J, Q, K, A. If a card was played you can clikc it. It will change to green. 
 
@@ -16,4 +16,4 @@ Q562
 `-
 JT98
 
-N starts and I see bidding $\auction{,,,1s,2d}$
+N starts and I see bidding 1s, 2d. So you know your partner has minim 5 spads and 12-21 points, your oponen has at least 5 dimonds, 8-15 points. After entering all this information your screen can look like that. 
