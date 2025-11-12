@@ -6,6 +6,8 @@ Bridge Temporary Evaluation – Equalized Layout
 - N (top) and S (bottom) centered horizontally and the SAME width/height as W/E columns
 - Inline cards rendered as Label "buttons" with full solid color fill on toggle
 - Enter/Tab jumps to next suit; auto-mark when replacing a single 'X' with one rank
+- Per-player Cards counter (total across suits)
+- Center "table" square with N/E/S/W tiles toggling green <-> red on click
 """
 
 import tkinter as tk
@@ -49,14 +51,16 @@ class HandFrame(ttk.LabelFrame):
         self.points_max = ttk.Entry(self, width=3, justify='center')
         self.points_min.grid(row=row, column=1, sticky="w")
         self.points_max.grid(row=row, column=3, sticky="w", padx=(0,6))
-        ttk.Label(self, text="Exact").grid(row=row, column=4, sticky="e")
-        self.points_exact = ttk.Entry(self, width=4, justify='center')
-        self.points_exact.grid(row=row, column=5, sticky="w")
         row += 1
 
-        ttk.Label(self, text="HCP").grid(row=row, column=0, sticky="w", pady=(2, 4))
+        # HCP + Cards counters
+        ttk.Label(self, text="HCP").grid(row=row, column=0, sticky="w", pady=(2, 2))
         self.hcp_var = tk.StringVar(value="0")
-        ttk.Label(self, textvariable=self.hcp_var, width=4).grid(row=row, column=1, sticky="w", pady=(2, 4))
+        ttk.Label(self, textvariable=self.hcp_var, width=4).grid(row=row, column=1, sticky="w", pady=(2, 2))
+
+        ttk.Label(self, text="Cards").grid(row=row, column=2, sticky="e", pady=(2, 2))
+        self.cards_total_var = tk.StringVar(value="0")
+        ttk.Label(self, textvariable=self.cards_total_var, width=4).grid(row=row, column=3, sticky="w", pady=(2, 2))
         row += 1
 
         self.suit_count_vars = {}
@@ -72,7 +76,7 @@ class HandFrame(ttk.LabelFrame):
 
             cards_var = tk.StringVar()
             self.suit_card_vars[suit_code] = cards_var
-            cards_entry = ttk.Entry(self, width=16, textvariable=cards_var)
+            cards_entry = ttk.Entry(self, width=13, textvariable=cards_var)
             cards_entry.grid(row=row, column=2, sticky="w")
             self.cards_entries[suit_code] = cards_entry
 
@@ -86,8 +90,9 @@ class HandFrame(ttk.LabelFrame):
                 if new_norm != var.get().upper():
                     var.set(new_norm)
                 cntv.set(str(len(new_norm)))
-                self.update_hcp()
+                self.update_stats()
 
+                # auto-mark a single new rank that replaced one 'X'
                 old_norm = normalize_cards(old)
                 if old_norm:
                     old_counter = Counter(old_norm)
@@ -116,7 +121,11 @@ class HandFrame(ttk.LabelFrame):
                 except Exception:
                     return
                 cards = var.get()
-                entry.config(background="#fff4f4" if len(cards) != desired else "white")
+                # ttk.Entry background may be theme-controlled, but try:
+                try:
+                    entry.config(background="#fff4f4" if len(cards) != desired else "white")
+                except tk.TclError:
+                    pass
 
             cnt_var.trace_add("write", on_count_change)
 
@@ -194,25 +203,28 @@ class HandFrame(ttk.LabelFrame):
             self.suit_count_vars[sc].set(str(len(norm)))
             self.last_cards[sc] = norm
             self.rebuild_card_strip(sc)
-        self.update_hcp()
+        self.update_stats()
 
     def clear_all(self):
         self.points_min.delete(0, 'end')
         self.points_max.delete(0, 'end')
-        self.points_exact.delete(0, 'end')
         for sc in list(self.suit_card_vars.keys()):
             self.suit_card_vars[sc].set("")
-            self.suit_count_vars[suit_code].set("")
+            self.suit_count_vars[sc].set("")
             self.last_cards[sc] = ""
             self.played_counts[sc].clear()
             self.rebuild_card_strip(sc)
-        self.update_hcp()
+        self.update_stats()
 
-    def update_hcp(self):
-        total = 0
+    def update_stats(self):
+        total_hcp = 0
+        total_cards = 0
         for sc, var in self.suit_card_vars.items():
-            total += hcp_from_cards(var.get())
-        self.hcp_var.set(str(total))
+            cards = var.get()
+            total_hcp += hcp_from_cards(cards)
+            total_cards += len(cards)
+        self.hcp_var.set(str(total_hcp))
+        self.cards_total_var.set(str(total_cards))
 
     def get_state(self):
         suits = {}
@@ -225,7 +237,8 @@ class HandFrame(ttk.LabelFrame):
         return {
             'player': self.player_label,
             'points_range': (self.points_min.get(), self.points_max.get()),
-            'points_exact': self.points_exact.get(),
+            'hcp': self.hcp_var.get(),
+            'cards_total': self.cards_total_var.get(),
             'suits': suits
         }
 
@@ -251,43 +264,46 @@ class BridgeApp(tk.Tk):
         ttk.Button(topbar, text="Sort & Sync All", command=self.sort_all_hands).pack(side="right", padx=(6,0))
         ttk.Button(topbar, text="Clear All", command=self.clear_all_hands).pack(side="right")
 
-        # Main grid
+        # Main grid frame
         grid = ttk.Frame(self, padding=4)
         grid.pack(side="top", fill="both", expand=True)
         self.grid_frame = grid
 
-        # Two equal columns and three equal-height rows
-        grid.grid_columnconfigure(0, weight=1, uniform="cols")
-        grid.grid_columnconfigure(1, weight=1, uniform="cols")
+        # --- Column/row layout: 0 = W, 1 = TABLE (fixed), 2 = E ---
+        self.table_size = 140
+        self.table_margin = 24  # fixed gap around table (column 1 minsize)
+
+        self.grid_frame.grid_columnconfigure(0, weight=1, uniform="sides")
+        self.grid_frame.grid_columnconfigure(1, weight=0, minsize=self.table_size + self.table_margin)  # fixed
+        self.grid_frame.grid_columnconfigure(2, weight=1, uniform="sides")
         for r in (0, 1, 2):
-            grid.grid_rowconfigure(r, weight=1, uniform="rows")
+            self.grid_frame.grid_rowconfigure(r, weight=1, uniform="rows")
 
-        # Middle row: W & E
+        # Middle row: W/E
         self.frames = {}
-        self.frames['W'] = HandFrame(grid, 'West')
-        self.frames['E'] = HandFrame(grid, 'East')
-        self.frames['W'].grid(row=1, column=0, sticky="nsew", padx=(4,0), pady=0)
-        self.frames['E'].grid(row=1, column=1, sticky="nsew", padx=(0,4), pady=0)
+        self.frames['W'] = HandFrame(self.grid_frame, 'West')
+        self.frames['E'] = HandFrame(self.grid_frame, 'East')
+        self.frames['W'].grid(row=1, column=0, sticky="nsew", padx=4, pady=0)
+        self.frames['E'].grid(row=1, column=2, sticky="nsew", padx=4, pady=0)
 
-        # Top/bottom containers that center N and S
-        self.top_container = ttk.Frame(grid, padding=0)
-        self.bot_container = ttk.Frame(grid, padding=0)
-        self.top_container.grid(row=0, column=0, columnspan=2, sticky="nsew", padx=4, pady=4)
-        self.bot_container.grid(row=2, column=0, columnspan=2, sticky="nsew", padx=4, pady=4)
+        # Top/bottom containers spanning all three columns (N/S centered)
+        self.top_container = ttk.Frame(self.grid_frame, padding=0)
+        self.bot_container = ttk.Frame(self.grid_frame, padding=0)
+        self.top_container.grid(row=0, column=0, columnspan=3, sticky="nsew", padx=4, pady=4)
+        self.bot_container.grid(row=2, column=0, columnspan=3, sticky="nsew", padx=4, pady=4)
 
         for c in (self.top_container, self.bot_container):
-            c.grid_columnconfigure(0, weight=1)  # left spacer
-            c.grid_columnconfigure(1, weight=0)  # center hand (minsize set below)
-            c.grid_columnconfigure(2, weight=1)  # right spacer
-            c.grid_rowconfigure(0, weight=1)     # take full height
+            c.grid_columnconfigure(0, weight=1)
+            c.grid_columnconfigure(1, weight=0)
+            c.grid_columnconfigure(2, weight=1)
+            c.grid_rowconfigure(0, weight=1)
 
-        # N and S inside their centering containers
         self.frames['N'] = HandFrame(self.top_container, 'North')
         self.frames['S'] = HandFrame(self.bot_container, 'South')
         self.frames['N'].grid(row=0, column=1, sticky="nsew")
         self.frames['S'].grid(row=0, column=1, sticky="nsew")
 
-        # Keep N/S the same width as one W/E column
+        # Keep N/S the same width as one side column
         self.grid_frame.bind("<Configure>", self._sync_ns_size)
         self.frames['W'].bind("<Configure>", self._sync_ns_size)
         self.frames['E'].bind("<Configure>", self._sync_ns_size)
@@ -295,6 +311,76 @@ class BridgeApp(tk.Tk):
 
         self.after(100, self._fix_entry_bg)
 
+        # --- CENTER WRAPPER (fixed) + Canvas (placed inside) ---
+        self.center_wrap = ttk.Frame(
+            self.grid_frame,
+            width=self.table_size + self.table_margin,
+            height=self.table_size
+        )
+        self.center_wrap.grid(row=1, column=1, sticky="", pady=0)  # do not stretch
+        self.center_wrap.grid_propagate(False)  # lock size
+
+        self.table_canvas = tk.Canvas(
+            self.center_wrap,
+            width=self.table_size,
+            height=self.table_size,
+            highlightthickness=0
+        )
+        # Center horizontally at top of wrapper
+        self.table_canvas.place(relx=0.5, rely=0.0, anchor='n')
+
+        # Draw the table tiles
+        self.table_colors = {'N': '#6fff6f', 'E': '#6fff6f', 'S': '#6fff6f', 'W': '#6fff6f'}
+        self.table_items = {}
+        self._draw_table_square()
+
+    # ---------- Table square drawing & behavior ----------
+    def _draw_table_square(self):
+        cv = self.table_canvas
+        cv.delete("all")
+        size = self.table_size
+        pad = 10
+
+        # background square
+        cv.create_rectangle(0, 0, size, size, outline="#333333", width=2)
+
+        # positions for letters (middle of each side, inside the border)
+        positions = {
+            'N': (size / 2, pad + 18),
+            'E': (size - (pad + 18), size / 2),
+            'S': (size / 2, size - (pad + 18)),
+            'W': (pad + 18, size / 2),
+        }
+
+        tile_w, tile_h = 34, 26
+        for letter, (cx, cy) in positions.items():
+            x0, y0 = cx - tile_w / 2, cy - tile_h / 2
+            x1, y1 = cx + tile_w / 2, cy + tile_h / 2
+            rect = cv.create_rectangle(
+                x0, y0, x1, y1,
+                fill=self.table_colors[letter],
+                outline="#222222", width=1
+            )
+            text = cv.create_text(cx, cy, text=letter, font=("TkDefaultFont", 12, "bold"))
+            cv.tag_bind(rect, "<Button-1>", lambda e, L=letter: self._toggle_table_letter(L))
+            cv.tag_bind(text, "<Button-1>", lambda e, L=letter: self._toggle_table_letter(L))
+            self.table_items[letter] = (rect, text)
+
+    def _toggle_table_letter(self, letter):
+        # decide which pair to toggle together
+        pair = ('W', 'E') if letter in ('W', 'E') else ('N', 'S')
+
+        # use the clicked letter's current color to decide the new color
+        cur = self.table_colors[letter]
+        new_color = "#ff6f6f" if cur == "#6fff6f" else "#6fff6f"
+
+        # apply to both letters in the pair
+        for L in pair:
+            self.table_colors[L] = new_color
+            rect, _ = self.table_items[L]
+            self.table_canvas.itemconfig(rect, fill=new_color)
+
+    # ---------- Existing helpers ----------
     def _sync_ns_size(self, event=None):
         """Ensure North and South are the same width as one W/E column."""
         col_w = max(self.frames['W'].winfo_width(), self.frames['E'].winfo_width())
