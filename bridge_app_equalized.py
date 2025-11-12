@@ -35,9 +35,9 @@ def hcp_from_cards(cards):
     return sum(RANK_VALUES.get(ch, 0) for ch in cards)
 
 class HandFrame(ttk.LabelFrame):
-    def __init__(self, master, player_label, *args, **kwargs):
+    def __init__(self, master, player_label, on_change=None, *args, **kwargs):
         super().__init__(master, text=f" {player_label} ", padding=(6, 4), *args, **kwargs)
-        self.player_label = player_label
+        self.on_change = on_change
 
         self.last_cards = {sc: "" for sc, _ in SUITS}
         self.played_counts = {sc: defaultdict(int) for sc, _ in SUITS}
@@ -225,6 +225,8 @@ class HandFrame(ttk.LabelFrame):
             total_cards += len(cards)
         self.hcp_var.set(str(total_hcp))
         self.cards_total_var.set(str(total_cards))
+        if callable(self.on_change):
+            self.on_change()
 
     def get_state(self):
         suits = {}
@@ -264,6 +266,12 @@ class BridgeApp(tk.Tk):
         ttk.Button(topbar, text="Sort & Sync All", command=self.sort_all_hands).pack(side="right", padx=(6,0))
         ttk.Button(topbar, text="Clear All", command=self.clear_all_hands).pack(side="right")
 
+        # Summary bar just under the buttons
+        self.summary_var = tk.StringVar(value="Total cards: 0 | ♠0 ♥0 ♦0 ♣0 | Min pts: 0 | Max pts: 0")
+        summary = ttk.Frame(self, padding=(6, 3))
+        summary.pack(side="top", fill="x")
+        ttk.Label(summary, textvariable=self.summary_var).pack(side="left")
+
         # Main grid frame
         grid = ttk.Frame(self, padding=4)
         grid.pack(side="top", fill="both", expand=True)
@@ -281,8 +289,8 @@ class BridgeApp(tk.Tk):
 
         # Middle row: W/E
         self.frames = {}
-        self.frames['W'] = HandFrame(self.grid_frame, 'West')
-        self.frames['E'] = HandFrame(self.grid_frame, 'East')
+        self.frames['W'] = HandFrame(self.grid_frame, 'West', on_change=self.update_global_stats)
+        self.frames['E'] = HandFrame(self.grid_frame, 'East', on_change=self.update_global_stats)
         self.frames['W'].grid(row=1, column=0, sticky="nsew", padx=4, pady=0)
         self.frames['E'].grid(row=1, column=2, sticky="nsew", padx=4, pady=0)
 
@@ -298,15 +306,13 @@ class BridgeApp(tk.Tk):
             c.grid_columnconfigure(2, weight=1)
             c.grid_rowconfigure(0, weight=1)
 
-        self.frames['N'] = HandFrame(self.top_container, 'North')
-        self.frames['S'] = HandFrame(self.bot_container, 'South')
+        self.frames['N'] = HandFrame(self.top_container, 'North', on_change=self.update_global_stats)
+        self.frames['S'] = HandFrame(self.bot_container, 'South', on_change=self.update_global_stats)
         self.frames['N'].grid(row=0, column=1, sticky="nsew")
         self.frames['S'].grid(row=0, column=1, sticky="nsew")
 
         # Keep N/S the same width as one side column
         self.grid_frame.bind("<Configure>", self._sync_ns_size)
-        self.frames['W'].bind("<Configure>", self._sync_ns_size)
-        self.frames['E'].bind("<Configure>", self._sync_ns_size)
         self.after(0, self._sync_ns_size)
 
         self.after(100, self._fix_entry_bg)
@@ -333,6 +339,7 @@ class BridgeApp(tk.Tk):
         self.table_colors = {'N': '#6fff6f', 'E': '#6fff6f', 'S': '#6fff6f', 'W': '#6fff6f'}
         self.table_items = {}
         self._draw_table_square()
+        self.update_global_stats()
 
     # ---------- Table square drawing & behavior ----------
     def _draw_table_square(self):
@@ -382,12 +389,30 @@ class BridgeApp(tk.Tk):
 
     # ---------- Existing helpers ----------
     def _sync_ns_size(self, event=None):
-        """Ensure North and South are the same width as one W/E column."""
-        col_w = max(self.frames['W'].winfo_width(), self.frames['E'].winfo_width())
+        """Debounce NS width sync so it runs once after layout settles."""
+        if getattr(self, "_sync_pending", False):
+            return
+        self._sync_pending = True
+        # Run once after Tk finishes the current batch of Configure events
+        self.after_idle(self._do_sync_ns_size)
+
+    def _do_sync_ns_size(self):
+        self._sync_pending = False
+        try:
+            w = self.frames['W'].winfo_width()
+            e = self.frames['E'].winfo_width()
+        except tk.TclError:
+            # Widgets might be mid-destroy or not yet realized
+            return
+        col_w = max(w, e)
         if col_w <= 0:
             return
-        self.top_container.grid_columnconfigure(1, minsize=col_w)
-        self.bot_container.grid_columnconfigure(1, minsize=col_w)
+        # Make N/S the same width as a side column
+        try:
+            self.top_container.grid_columnconfigure(1, minsize=col_w)
+            self.bot_container.grid_columnconfigure(1, minsize=col_w)
+        except tk.TclError:
+            pass
 
     def _fix_entry_bg(self):
         style = ttk.Style()
@@ -428,6 +453,57 @@ class BridgeApp(tk.Tk):
     def clear_all_hands(self):
         for hf in self.frames.values():
             hf.clear_all()
+
+    def update_global_stats(self):
+        # totals across all four hands
+        total_cards = 0
+        suit_totals = {'S': 0, 'H': 0, 'D': 0, 'C': 0}
+        min_points_sum = 0
+        max_points_sum = 0
+
+        for pl in ['N','E','S','W']:
+            hf = self.frames.get(pl)
+            if not hf:
+                continue
+
+            # HCP for this hand
+            try:
+                hcp = int(hf.hcp_var.get())
+            except Exception:
+                hcp = 0
+
+            # Pts min/max from entries (blank -> 0)
+            def _to_int(entry):
+                try:
+                    v = entry.get().strip()
+                    return int(v) if v else 0
+                except Exception:
+                    return 0
+
+            pts_min = _to_int(hf.points_min)
+            pts_max = _to_int(hf.points_max)
+
+            # suits/cards
+            hand_cards = 0
+            for sc in ['S','H','D','C']:
+                cards = hf.suit_card_vars[sc].get()
+                n = len(cards)
+                suit_totals[sc] += n
+                hand_cards += n
+            total_cards += hand_cards
+
+            # min/max points rule: take the higher between HCP and declared min/max
+            min_points_sum += max(hcp, pts_min)
+            max_points_sum += max(hcp, pts_max)
+
+        # Build summary line
+        summary = (
+            f"Total cards: {total_cards} | "
+            f"♠{suit_totals['S']} ♥{suit_totals['H']} ♦{suit_totals['D']} ♣{suit_totals['C']} | "
+            f"Min pts: {min_points_sum} | Max pts: {max_points_sum}"
+        )
+        self.summary_var.set(summary)
+
 
 if __name__ == "__main__":
     app = BridgeApp()
